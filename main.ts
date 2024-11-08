@@ -185,10 +185,15 @@ export default class driveSyncPlugin extends Plugin {
 	haltAllOperations: boolean = false;
 	adapter: FileSystemAdapter;
 	attachmentTrackingInitializationComplete: boolean = false;
-	
+	layoutReady: boolean = false;
+
 	completeAllPendingSyncs = async () => {
-		console.log(this.settings.removeMergeNotices)
-		console.log(this.settings.removeMergeNoticesInterval)
+		console.log(this.settings.removeMergeNotices);
+		console.log(this.settings.removeMergeNoticesInterval);
+		if (!this.app.workspace.layoutReady) {
+			// Workspace is still loading, do nothing
+			return;
+		}
 		if (this.haltAllOperations) {
 			return;
 		}
@@ -400,6 +405,10 @@ export default class driveSyncPlugin extends Plugin {
 	};
 
 	notifyError = async () => {
+		if (!this.app.workspace.layoutReady || !this.layoutReady) {
+			// Workspace is still loading, do nothing
+			return;
+		}
 		if (this.haltAllOperations) {
 			return;
 		}
@@ -500,6 +509,10 @@ export default class driveSyncPlugin extends Plugin {
 	};
 
 	refreshAll = async () => {
+		if (!this.app.workspace.layoutReady || !this.layoutReady) {
+			// Workspace is still loading, do nothing
+			return;
+		}
 		if (this.haltAllOperations) {
 			return;
 		}
@@ -806,6 +819,10 @@ export default class driveSyncPlugin extends Plugin {
 		file: TFile,
 		forced: "forced" | false = false
 	) => {
+		if (!this.app.workspace.layoutReady || !this.layoutReady) {
+			// Workspace is still loading, do nothing
+			return;
+		}
 		try {
 			if (this.haltAllOperations) {
 				return;
@@ -927,6 +944,10 @@ export default class driveSyncPlugin extends Plugin {
 	};
 
 	checkAndEmptySyncQueue = async () => {
+		if (!this.app.workspace.layoutReady || !this.layoutReady) {
+			// Workspace is still loading, do nothing
+			return;
+		}
 		if (
 			this.haltAllOperations ||
 			this.completingPendingSync ||
@@ -1059,13 +1080,21 @@ export default class driveSyncPlugin extends Plugin {
 				})
 			);
 		} else {
-			await this.app.vault.create(
-				PENDING_SYNC_FILE_NAME,
-				JSON.stringify({
-					pendingSyncItems: this.pendingSyncItems,
-					finalNamesForFileID: mapToObject(this.finalNamesForFileID),
-				})
-			);
+			try {
+				await this.app.vault.create(
+					PENDING_SYNC_FILE_NAME,
+					JSON.stringify({
+						pendingSyncItems: this.pendingSyncItems,
+						finalNamesForFileID: mapToObject(
+							this.finalNamesForFileID
+						),
+					})
+				);
+			} catch (err) {
+				console.log(
+					"CAUGHT: ERROR for PENDIND SYNC: Probably during startup"
+				);
+			}
 		}
 		await this.writeToVerboseLogFile("LOG: Exited writeToPendingSyncFile");
 	};
@@ -1100,6 +1129,10 @@ export default class driveSyncPlugin extends Plugin {
 	};
 
 	writeToErrorLogFile = async (log: Error) => {
+		if (!this.app.workspace.layoutReady || !this.layoutReady) {
+			// Workspace is still loading, do nothing
+			return;
+		}
 		await this.writeToVerboseLogFile("LOG: Entering writeToErrorLogFile");
 		if (!this.settings.errorLoggingToFile) {
 			return;
@@ -1123,12 +1156,18 @@ export default class driveSyncPlugin extends Plugin {
 				);
 				this.errorLoggingForTheFirstTimeInThisSession = false;
 			} else {
-				await this.app.vault.create(
-					ERROR_LOG_FILE_NAME,
-					`${new Date().toString()}-${log.name}-${log.message}-${
-						log.stack
-					}`
-				);
+				try {
+					await this.app.vault.create(
+						ERROR_LOG_FILE_NAME,
+						`${new Date().toString()}-${log.name}-${log.message}-${
+							log.stack
+						}`
+					);
+				} catch (err) {
+					console.log(
+						"CAUGHT: ERROR for ERROR LOGS: Probably during startup"
+					);
+				}
 			}
 		} catch (err) {
 			console.log(err);
@@ -1137,6 +1176,10 @@ export default class driveSyncPlugin extends Plugin {
 	};
 
 	writeToVerboseLogFile = async (log: string) => {
+		if (!this.app.workspace.layoutReady || !this.layoutReady) {
+			// Workspace is still loading, do nothing
+			return;
+		}
 		if (!this.settings.verboseLoggingToFile) {
 			return;
 		}
@@ -1159,7 +1202,16 @@ export default class driveSyncPlugin extends Plugin {
 				// console.log("modified", log, `${content}\n\n${log}`);
 				this.verboseLoggingForTheFirstTimeInThisSession = false;
 			} else {
-				await this.app.vault.create(VERBOSE_LOG_FILE_NAME, `${log}`);
+				try {
+					await this.app.vault.create(
+						VERBOSE_LOG_FILE_NAME,
+						`${log}`
+					);
+				} catch (err) {
+					console.log(
+						"CAUGHT: ERROR for VERBOSE LOGS: Probably during startup"
+					);
+				}
 			}
 		} catch (err) {
 			console.log(err);
@@ -1191,8 +1243,9 @@ export default class driveSyncPlugin extends Plugin {
 		return false;
 	};
 
-	async onload() {
+	initFunction = async () => {
 		this.adapter = this.app.vault.adapter as FileSystemAdapter;
+		this.layoutReady = true;
 		await this.loadSettings();
 
 		await this.writeToVerboseLogFile("LOG: getAccessToken");
@@ -1413,7 +1466,10 @@ export default class driveSyncPlugin extends Plugin {
 			.map((file) => this.localFiles.push(file.path));
 
 		//console.log(toUpload, toDownload);
+	};
 
+	async onload() {
+		this.app.workspace.onLayoutReady(this.initFunction);
 		this.registerEvent(
 			this.app.vault.on("rename", async (newFile, oldpath) => {
 				if (ignoreFiles.includes(newFile.path)) {
@@ -1599,6 +1655,10 @@ export default class driveSyncPlugin extends Plugin {
 		);
 		this.registerEvent(
 			this.app.vault.on("create", async (e) => {
+				if (!this.app.workspace.layoutReady) {
+					// Workspace is still loading, do nothing
+					return;
+				}
 				if (ignoreFiles.includes(e.path)) {
 					return;
 				}
@@ -2270,6 +2330,7 @@ class syncSettings extends PluginSettingTab {
 					this.plugin.saveSettings();
 				});
 			});
+
 		new Setting(containerEl)
 			.setName("Remove merging changes notices automatically (NOT RECOMMENDED)")
 			.setDesc(
@@ -2296,62 +2357,63 @@ class syncSettings extends PluginSettingTab {
 						this.plugin.saveSettings();
 					})
 			);
-		new Setting(containerEl)
-			.setName("Upload all")
-			.setDesc(
-				"Upload all files to Google Drive, thus DELETING ALL PREVIOUS FILES"
-			)
-			.addButton((button) =>
-				button.setIcon("cloud").onClick(async () => {
-					new Notice("Clearing vault in Google Drive...");
-					await deleteFile(
-						this.plugin.settings.accessToken,
-						this.plugin.settings.vaultId
-					);
-					await this.plugin.cleanInstall();
-				})
-			);
-		new Setting(containerEl)
-			.setName("Download all")
-			.setDesc(
-				"Download all files from Google Drive, thus DELETING ALL PREVIOUS FILES"
-			)
-			.addButton((button) =>
-				button.setIcon("install").onClick(async () => {
-					new Notice("Clearing vault...");
-					var filesList = this.app.vault.getFiles();
-					this.plugin.settings.refresh = true;
-					for (const file of filesList) {
-						this.app.vault.delete(file, true);
-					}
-					new Notice("Downloading files...");
-					for (const file of this.plugin.settings.filesList) {
-						//console.log(file);
 
-						var res = await getFile(
-							this.plugin.settings.accessToken,
-							file.id
-						);
-						await this.app.vault
-							.createBinary(res[0], res[1])
-							.catch(async () => {
-								var path = res[0]
-									.split("/")
-									.slice(0, -1)
-									.join("/");
-								//console.log(path);
+		/* -- LEGACY BUTTONS, CODE TO BE REMOVED -- */
+		// new Setting(containerEl)
+		// 	.setName("Upload all")
+		// 	.setDesc(
+		// 		"Upload all files to Google Drive, thus DELETING ALL PREVIOUS FILES"
+		// 	)
+		// 	.addButton((button) =>
+		// 		button.setIcon("cloud").onClick(async () => {
+		// 			new Notice("Clearing vault in Google Drive...");
+		// 			await deleteFile(
+		// 				this.plugin.settings.accessToken,
+		// 				this.plugin.settings.vaultId
+		// 			);
+		// 			await this.plugin.cleanInstall();
+		// 		})
+		// 	);
+		// new Setting(containerEl)
+		// 	.setName("Download all")
+		// 	.setDesc(
+		// 		"Download all files from Google Drive, thus DELETING ALL PREVIOUS FILES"
+		// 	)
+		// 	.addButton((button) =>
+		// 		button.setIcon("install").onClick(async () => {
+		// 			new Notice("Clearing vault...");
+		// 			var filesList = this.app.vault.getFiles();
+		// 			this.plugin.settings.refresh = true;
+		// 			for (const file of filesList) {
+		// 				this.app.vault.delete(file, true);
+		// 			}
+		// 			new Notice("Downloading files...");
+		// 			for (const file of this.plugin.settings.filesList) {
+		// 				//console.log(file);
+		// 				var res = await getFile(
+		// 					this.plugin.settings.accessToken,
+		// 					file.id
+		// 				);
+		// 				await this.app.vault
+		// 					.createBinary(res[0], res[1])
+		// 					.catch(async () => {
+		// 						var path = res[0]
+		// 							.split("/")
+		// 							.slice(0, -1)
+		// 							.join("/");
+		// 						//console.log(path);
 
-								await this.app.vault.createFolder(path);
-								await this.app.vault.createBinary(
-									res[0],
-									res[1]
-								);
-							});
-					}
-					this.plugin.settings.refresh = false;
-					new Notice("Sync complete :)");
-				})
-			);
+		// 						await this.app.vault.createFolder(path);
+		// 						await this.app.vault.createBinary(
+		// 							res[0],
+		// 							res[1]
+		// 						);
+		// 					});
+		// 			}
+		// 			this.plugin.settings.refresh = false;
+		// 			new Notice("Sync complete :)");
+		// 		})
+		// 	);
 		new Setting(containerEl)
 			.setName("Blacklist paths")
 			.setDesc(
